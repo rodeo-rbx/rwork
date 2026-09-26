@@ -86,32 +86,24 @@ rwork publish --place <id>   # build + upload to a live place
 
 ### Build stamp
 
-`build`, `publish`, and `sync` (including `dev`) stamp two attributes on
-`ReplicatedStorage` through their shared output-project setup so a place can be
-traced back to its source: `RWORK_BUILD` (the `[build.*]` name) and
-`RWORK_REVISION` (`branch@commit`, with a `-dirty` suffix when tracked files
-have uncommitted changes). `RWORK_REVISION` in the environment replaces the
-whole string (for other CIs, tarball builds, or stamping a release tag);
-otherwise on GitHub Actions it comes from `GITHUB_SHA` / `GITHUB_REF_NAME`,
-elsewhere from `git`, or `unknown` outside a repo. Read it at runtime with
-`game:GetService("ReplicatedStorage"):GetAttribute("RWORK_REVISION")`.
-The stamp reflects source state when the command prepares its project. During
-sync it is sent through Rojo without serving Workspace; it is not refreshed on
-every edit or commit. Restart sync to refresh it. Existing projects reading the
-old Workspace attributes should switch to ReplicatedStorage.
+Every command stamps two attributes on `ReplicatedStorage` so a place can be
+traced back to what it was built from:
 
-### Sync supervision
+- `RWORK_BUILD` — the `[build.*]` name the place was built with, e.g. `dev` or `prod`
+- `RWORK_REVISION` — the git revision as `branch@commit`, with `-dirty` appended
+  when there were uncommitted changes
 
-`sync` keeps its child processes alive: `rojo serve`, `rojo sourcemap --watch`,
-and `darklua --watch` are restarted if they exit, and darklua is also killed and
-restarted when its file-watcher thread panics (the process survives that but
-silently stops compiling; see [#2](https://github.com/revvy02/rwork/issues/2)).
-After a darklua restart, outputs whose source no longer exists are pruned, so a
-module deleted while the compiler was dead doesn't linger in the served tree.
-darklua's full output is written to `.rwork/<build>/darklua.log` for post-mortems.
-Use darklua from [revvy02/darklua](https://github.com/revvy02/darklua/releases)
-v0.19.3 or newer, which fixes that panic and the dropped-edit bug
-([#3](https://github.com/revvy02/rwork/issues/3)) at the source.
+Read them in game from `ReplicatedStorage`:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+print(ReplicatedStorage:GetAttribute("RWORK_BUILD"))     --> "prod"
+print(ReplicatedStorage:GetAttribute("RWORK_REVISION"))  --> "main@3f2a9c1e0b7d4a55c8e2f1a9b6d0c3e7f4a1b2c9"
+-- a local build with uncommitted changes:              --> "feature/stamp@1cdb0bd5...-dirty"
+```
+
+During sync the stamp is taken once at startup; restart sync to refresh it.
 
 ### Live places
 
@@ -123,14 +115,12 @@ rwork dev --place <id|name> --upload     # publish a fresh build + open + sync
 rwork publish --place <id|name> --open   # publish and open, no sync loop
 ```
 
-Publishing authenticates via an Open Cloud API key: set `RWORK_API_KEY` (a key with place-publishing scope for the place's universe) and the universe is auto-resolved from the place id. Without a key, it falls back to Rojo's cookie auth.
-
 ## Environment
 
 - `RWORK_PLACE_ID` — default live place (a raw id or a `[places.*]` name); meant as each dev's personal scratch place
 - `RWORK_API_KEY` — Open Cloud key for publishing (place-publishing scope)
 - `RWORK_UNIVERSE_ID` — override the auto-resolved universe id when publishing
-- `RWORK_REVISION` — override the `RWORK_REVISION` attribute stamped by `build`/`publish`/`sync` (see Build stamp)
+- `RWORK_REVISION` — override the stamped revision (see Build stamp); by default it comes from `GITHUB_SHA`/`GITHUB_REF_NAME` on GitHub Actions, otherwise from `git`
 - `RWORK_DIAG=1` — verbose diagnostic logging
 - `RWORK_INCLUDE_ASSETS_WHEN_SYNCING` / `RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING` — set `false` to exclude during sync
 - `RWORK_SYNC_PORT` — port for `rojo serve` during sync (rojo's default when unset). Sync also auto-restarts rojo if it crashes (repeated immediate crashes give up).
