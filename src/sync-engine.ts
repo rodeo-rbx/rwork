@@ -6,9 +6,12 @@ import {
 	rmSync,
 	readdirSync,
 	existsSync,
+	statSync,
+	watch,
+	type FSWatcher,
+	type Stats,
 } from "fs";
 import { dirname, join, relative, resolve, extname } from "path";
-import { watch as chokidarWatch, type FSWatcher } from "chokidar";
 import { log } from "./log";
 
 const LINK_EXTENSIONS = new Set([
@@ -53,7 +56,7 @@ function writeOneFile(srcPath: string, destPath: string, relPath: string): void 
 	// darklua's write and can delete its output, dropping the module from the
 	// synced tree (e.g. an edited init.luau vanishing, so its folder stops being
 	// a ModuleScript). Skip .luau BEFORE the unlink. Deletes are still handled
-	// by onFileUnlink (darklua --watch leaves stale output on a source delete).
+	// by the watcher's removeFromDest (darklua --watch leaves stale output on a source delete).
 	if (shouldSkipCopy(relPath)) return;
 
 	mkdirSync(dirname(destPath), { recursive: true });
@@ -128,7 +131,42 @@ export interface WatchSyncOptions {
 	onLuauChange?: () => void;
 }
 
-/** Start watching src for changes, sync to dest */
+/** How long a batch of events waits for the burst to go quiet, and the most it's ever held.
+ *  Batches sync from disk, so a short settle only means more, smaller batches during a burst. */
+const SETTLE_MS = 20;
+const MAX_BATCH_MS = 1000;
+/** A batch this large is synced by walking the whole tree instead of path by path. */
+const FULL_SYNC_PATHS = 200;
+
+function statOrNull(path: string): Stats | null {
+	try {
+		return statSync(path);
+	} catch {
+		return null;
+	}
+}
+
+/** Whether dest already holds src's current content: the same inode for a hard link, otherwise a
+ *  copy that is the same size and no older than the source. */
+function isUpToDate(srcPath: string, destPath: string, relPath: string): boolean {
+	const d = statOrNull(destPath);
+	if (!d || d.isDirectory()) return false;
+	const s = statSync(srcPath);
+	if (shouldHardLink(relPath) && s.ino === d.ino && s.dev === d.dev) return true;
+	return s.size === d.size && d.mtimeMs >= s.mtimeMs;
+}
+
+/**
+ * Start watching src for changes, sync to dest.
+ *
+ * One recursive fs.watch on src, created once. Per-folder watches (chokidar's model) have to be
+ * opened and closed as folders come and go, and on macOS every open or close makes Bun rebuild its
+ * shared FSEvents stream from "now", dropping whatever happens in between; a git checkout that
+ * moves folders of assets lost its new folders that way. Events only say which path changed, so
+ * each batch syncs those paths from what's on disk when it runs: a path that's gone is removed, a
+ * folder is synced as a whole, a file is linked or copied, and a renamed entry's folder listing is
+ * rechecked too. That's correct whatever order or grouping the events came in.
+ */
 export function startWatch(options: WatchSyncOptions): FSWatcher {
 	const absSrc = resolve(options.src);
 	const absDest = resolve(options.dest);
@@ -136,16 +174,13 @@ export function startWatch(options: WatchSyncOptions): FSWatcher {
 	log.info(`[sync] Watching for changes... (diag=${log.diagEnabled ? "on" : "off"})`);
 	log.diag(`startWatch absSrc=${absSrc} absDest=${absDest}`);
 
-	const destOf = (srcPath: string) => join(absDest, relative(absSrc, srcPath));
-	const relOf = (srcPath: string) => relative(absSrc, srcPath);
-
 	let totalEvents = 0;
+	let totalBatches = 0;
 	let totalLuauTriggers = 0;
 	let lastEventAt = Date.now();
 	const startedAt = Date.now();
 
-	const fireLuauChange = (relPath: string) => {
-		if (!relPath.endsWith(".luau")) return;
+	const fireLuauChange = () => {
 		totalLuauTriggers++;
 		log.diag(`  → onLuauChange #${totalLuauTriggers}`);
 		try {
@@ -156,75 +191,139 @@ export function startWatch(options: WatchSyncOptions): FSWatcher {
 		}
 	};
 
-	const handle =
-		(eventName: string, fn: (srcPath: string) => void) =>
-		(srcPath: string) => {
-			totalEvents++;
-			lastEventAt = Date.now();
-			const rel = relOf(srcPath);
-			log.diag(`watch event #${totalEvents}: type=${eventName} filename=${rel}`);
-			try {
-				fn(srcPath);
-			} catch (e) {
-				log.error(`[sync] ${eventName} threw for ${rel}: ${(e as Error).message}`);
-				log.diag((e as Error).stack ?? "(no stack)");
-			}
-		};
-
-	const onFileWrite = (srcPath: string) => {
-		const rel = relOf(srcPath);
-		writeOneFile(srcPath, destOf(srcPath), rel);
-		const kind = shouldSkipCopy(rel) ? "skipped" : shouldHardLink(rel) ? "link" : "copy";
-		log.info(`[sync] change: ${rel} (${kind})`);
-		fireLuauChange(rel);
+	/** Removes rel from dest, whatever it is there. A deleted .luau source's output goes too:
+	 *  darklua --watch leaves it behind. */
+	const removeFromDest = (rel: string) => {
+		const destPath = join(absDest, rel);
+		const d = statOrNull(destPath);
+		if (!d) return;
+		rmSync(destPath, { recursive: true, force: true });
+		log.info(`[sync] ${d.isDirectory() ? "rmdir" : "delete"}: ${rel}`);
 	};
 
-	const onFileUnlink = (srcPath: string) => {
-		try {
-			unlinkSync(destOf(srcPath));
-		} catch (e) {
-			const code = (e as NodeJS.ErrnoException).code;
-			if (code !== "ENOENT") {
-				log.diag(`unlink failed: ${relOf(srcPath)}: ${(e as Error).message}`);
+	const writeFile = (rel: string) => {
+		writeOneFile(join(absSrc, rel), join(absDest, rel), rel);
+		log.info(`[sync] change: ${rel} (${shouldHardLink(rel) ? "link" : "copy"})`);
+	};
+
+	const ensureDestDir = (rel: string) => {
+		const destPath = join(absDest, rel);
+		const d = statOrNull(destPath);
+		if (d?.isDirectory()) return;
+		if (d) unlinkSync(destPath);
+		mkdirSync(destPath, { recursive: true });
+		log.info(`[sync] mkdir: ${rel || "."}`);
+	};
+
+	/** Removes what dest/rel holds that src/rel no longer does. */
+	const removeStale = (rel: string, srcNames: Set<string>) => {
+		for (const name of readdirSync(join(absDest, rel))) {
+			if (!srcNames.has(name)) removeFromDest(join(rel, name));
+		}
+	};
+
+	/** Makes dest/rel match the src folder rel, all the way down. */
+	const syncTree = (rel: string) => {
+		ensureDestDir(rel);
+		const entries = readdirSync(join(absSrc, rel), { withFileTypes: true });
+		for (const e of entries) {
+			const child = join(rel, e.name);
+			if (e.isDirectory()) syncTree(child);
+			else if (!shouldSkipCopy(child) && !isUpToDate(join(absSrc, child), join(absDest, child), child)) {
+				writeFile(child);
 			}
 		}
-		log.info(`[sync] delete: ${relOf(srcPath)}`);
+		removeStale(rel, new Set(entries.map((e) => e.name)));
 	};
 
-	const onDirAdd = (srcPath: string) => {
-		mkdirSync(destOf(srcPath), { recursive: true });
-		log.info(`[sync] mkdir: ${relOf(srcPath) || "."}`);
+	/** Checks one folder's listing (not its contents): adds entries dest lacks, including whole
+	 *  folders it never heard about, and removes entries src no longer has. */
+	const syncListing = (rel: string) => {
+		if (!statOrNull(join(absSrc, rel))?.isDirectory()) {
+			removeFromDest(rel);
+			return;
+		}
+		ensureDestDir(rel);
+		const entries = readdirSync(join(absSrc, rel), { withFileTypes: true });
+		for (const e of entries) {
+			const child = join(rel, e.name);
+			if (existsSync(join(absDest, child))) continue;
+			if (e.isDirectory()) syncTree(child);
+			else if (!shouldSkipCopy(child)) writeFile(child);
+		}
+		removeStale(rel, new Set(entries.map((e) => e.name)));
 	};
 
-	const onDirUnlink = (srcPath: string) => {
-		rmSync(destOf(srcPath), { recursive: true, force: true });
-		log.info(`[sync] rmdir: ${relOf(srcPath)}`);
+	/** Syncs one path from what's on disk now. */
+	const syncPath = (rel: string) => {
+		const s = statOrNull(join(absSrc, rel));
+		if (!s) removeFromDest(rel);
+		else if (s.isDirectory()) syncTree(rel);
+		else if (!shouldSkipCopy(rel)) writeFile(rel);
 	};
 
-	const watcher = chokidarWatch(absSrc, { ignoreInitial: true });
+	// path -> strongest event kind seen this batch ("rename" also rechecks the parent's listing)
+	const pending = new Map<string, "change" | "rename">();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let batchStartedAt = 0;
 
-	watcher
-		.on("add", handle("add", onFileWrite))
-		.on("change", handle("change", onFileWrite))
-		.on("unlink", handle("unlink", onFileUnlink))
-		.on("addDir", handle("addDir", onDirAdd))
-		.on("unlinkDir", handle("unlinkDir", onDirUnlink))
-		.on("error", (err) => {
-			log.error(`[sync] watcher error: ${(err as Error).message}`);
-			log.diag((err as Error).stack ?? "(no stack)");
-		})
-		.on("ready", () => {
-			log.diag(`watcher ready`);
-		});
+	const flush = () => {
+		timer = undefined;
+		const batch = [...pending];
+		pending.clear();
+		totalBatches++;
+		const touchedLuau = batch.some(([rel]) => rel.endsWith(".luau"));
+		log.diag(`batch #${totalBatches}: ${batch.length} paths`);
+
+		const guarded = (what: string, rel: string, fn: () => void) => {
+			try {
+				fn();
+			} catch (e) {
+				// usually the path changed again mid-sync; its next event resyncs it
+				log.diag(`${what} ${rel || "."} failed: ${(e as Error).message}`);
+			}
+		};
+		if (batch.length > FULL_SYNC_PATHS) {
+			guarded("full sync", "", () => syncTree(""));
+		} else {
+			for (const [rel, kind] of batch) {
+				guarded("sync", rel, () => syncPath(rel));
+				if (kind === "rename" && rel !== "") {
+					const parent = dirname(rel);
+					guarded("sync listing", parent, () => syncListing(parent === "." ? "" : parent));
+				}
+			}
+		}
+		if (touchedLuau) fireLuauChange();
+	};
+
+	const watcher = watch(absSrc, { recursive: true }, (eventType, filename) => {
+		totalEvents++;
+		lastEventAt = Date.now();
+		const rel = filename ? filename.toString() : "";
+		log.diag(`watch event #${totalEvents}: type=${eventType} filename=${rel}`);
+		if (pending.get(rel) !== "rename") pending.set(rel, eventType === "rename" ? "rename" : "change");
+
+		const now = Date.now();
+		if (timer) clearTimeout(timer);
+		else batchStartedAt = now;
+		timer = setTimeout(flush, now - batchStartedAt >= MAX_BATCH_MS ? 0 : SETTLE_MS);
+	});
+
+	watcher.on("error", (err) => {
+		log.error(`[sync] watcher error: ${(err as Error).message}`);
+		log.diag((err as Error).stack ?? "(no stack)");
+	});
 
 	if (log.diagEnabled) {
-		setInterval(() => {
+		const heartbeat = setInterval(() => {
 			const idle = Math.round((Date.now() - lastEventAt) / 1000);
 			const uptime = Math.round((Date.now() - startedAt) / 1000);
 			log.diag(
-				`heartbeat: events=${totalEvents} luauTriggers=${totalLuauTriggers} idle=${idle}s uptime=${uptime}s`,
+				`heartbeat: events=${totalEvents} batches=${totalBatches} luauTriggers=${totalLuauTriggers} idle=${idle}s uptime=${uptime}s`,
 			);
 		}, 30_000);
+		watcher.on("close", () => clearInterval(heartbeat));
 	}
 
 	return watcher;

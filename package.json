@@ -9,7 +9,6 @@
 		"dev": "bun run src/index.ts"
 	},
 	"dependencies": {
-		"chokidar": "^5.0.0",
 		"commander": "^15.0.0",
 		"smol-toml": "^1.3.1"
 	},
