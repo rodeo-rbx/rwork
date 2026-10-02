@@ -66,10 +66,14 @@ export async function sync(rworkBuild: RworkBuild) {
 		startWatch({ src, dest });
 
 		// Keep the sourcemap fresh so darklua's convert_require resolves new/renamed
-		// modules (a structural change rewrites it; content-only edits leave it alone,
-		// and darklua no-ops on an unchanged sourcemap). Supervised like rojo serve
-		// below: rojo panics on the same transient fs events, and a dead watcher is
-		// silent — new modules just keep their raw `@alias` requires in the output.
+		// modules (a structural change rewrites it; content-only edits leave it alone).
+		// Every rewrite makes darklua rebuild every file, and convert_require re-parses
+		// the sourcemap once per file, so keep it scripts-only like prepareOut's:
+		// --include-non-scripts expands every .rbxm (game-prototype: 347 KB -> 11 MB,
+		// 1.8 s -> 26 s per rebuild) without changing a single converted require.
+		// Supervised like rojo serve below: rojo panics on the same transient fs
+		// events, and a dead watcher is silent — new modules just keep their raw
+		// `@alias` requires in the output.
 		const sourcemapArgs = [
 			"rojo",
 			"sourcemap",
@@ -77,7 +81,6 @@ export async function sync(rworkBuild: RworkBuild) {
 			"-o",
 			`${cwd}/sourcemap.json`,
 			"--watch",
-			"--include-non-scripts",
 		];
 		void (async () => {
 			let fastCrashes = 0;
