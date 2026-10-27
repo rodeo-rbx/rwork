@@ -46,8 +46,12 @@ function generateProjectFile(
 	return project;
 }
 
-function writeProjectFile(path: string, content: string) {
+/** Writes only when the content differs: rojo serve and `rojo sourcemap --watch` both
+ *  reload on any write, and a sourcemap rewrite makes darklua rebuild every file. */
+function writeProjectFile(path: string, content: string): boolean {
+	if (existsSync(path) && readFileSync(path, "utf-8") === content) return false;
 	writeFileSync(path, content);
+	return true;
 }
 
 function runDarklua(
@@ -88,20 +92,13 @@ function runSourcemapRegen(outputDir: string) {
 
 export { runDarklua, runSourcemapRegen };
 
-export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
+/** Writes .rwork/<build>/default.project.json (and sourcemap.project.json when there's a
+ *  src) from build.project. Returns whether either file changed. prepareOut runs it once;
+ *  sync runs it again whenever build.project changes. Throws on unreadable JSON. */
+export function writeProjects(build: RworkBuild, flags: PrepareOutFlags): boolean {
 	const outputDir = `.rwork/${build.name}`;
 	const srcFolder = build.src;
 	const baseFile = JSON.parse(readFileSync(build.project, "utf-8"));
-
-	if (!existsSync(outputDir)) {
-		mkdirSync(outputDir, { recursive: true });
-	}
-
-	// Generate darklua config in .rwork/<build>/darklua.json (only when there's
-	// something to compile)
-	if (srcFolder) {
-		prepareDarklua(build);
-	}
 
 	// Output project file: structural transforms + path remapping for cwd=outputDir
 	const outputProject = generateProjectFile(structuredClone(baseFile), flags);
@@ -120,15 +117,13 @@ export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
 	attributes.RWORK_REVISION = revision;
 
 	mutatePaths(outputProject, outputDir, srcFolder);
-	writeProjectFile(
+	let changed = writeProjectFile(
 		join(outputDir, "default.project.json"),
 		JSON.stringify(outputProject, null, "\t"),
 	);
 
-	// Everything below exists to feed darklua: the sourcemap drives
-	// convert_require, and initialSync stages src's non-lua assets. With no src
-	// the remapped project alone is the whole staging output.
-	if (!srcFolder) return;
+	// The sourcemap project only feeds darklua's convert_require.
+	if (!srcFolder) return changed;
 
 	// Sourcemap project file: mutate ALL paths (including src/) so rojo resolves from .rwork/<build>/
 	// darklua normalizes ../../ filePaths by joining with sourcemap parent dir, so they match source paths
@@ -138,10 +133,34 @@ export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
 		includeAssets: flags.includeAssets,
 	});
 	mutatePaths(sourcemapProject, outputDir);
-	writeProjectFile(
-		join(outputDir, "sourcemap.project.json"),
-		JSON.stringify(sourcemapProject, null, "\t"),
-	);
+	changed =
+		writeProjectFile(
+			join(outputDir, "sourcemap.project.json"),
+			JSON.stringify(sourcemapProject, null, "\t"),
+		) || changed;
+	return changed;
+}
+
+export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
+	const outputDir = `.rwork/${build.name}`;
+	const srcFolder = build.src;
+
+	if (!existsSync(outputDir)) {
+		mkdirSync(outputDir, { recursive: true });
+	}
+
+	// Generate darklua config in .rwork/<build>/darklua.json (only when there's
+	// something to compile)
+	if (srcFolder) {
+		prepareDarklua(build);
+	}
+
+	writeProjects(build, flags);
+
+	// Everything below exists to feed darklua: the sourcemap drives
+	// convert_require, and initialSync stages src's non-lua assets. With no src
+	// the remapped project alone is the whole staging output.
+	if (!srcFolder) return;
 
 	// Generate sourcemap
 	execSync(

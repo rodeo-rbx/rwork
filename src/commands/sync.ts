@@ -1,7 +1,8 @@
-import { readFileSync } from "fs";
+import { readFileSync, watch } from "fs";
+import { basename, dirname, resolve } from "path";
 import type { RworkBuild } from "../config";
 import { envConfig } from "../config";
-import { prepareOut } from "../prepare";
+import { prepareOut, writeProjects } from "../prepare";
 import { pruneStaleLuau, startWatch } from "../sync-engine";
 import { startDarkluaWatch, type DarkluaWatch } from "../darklua-watch";
 import { log } from "../log";
@@ -20,10 +21,36 @@ export async function sync(rworkBuild: RworkBuild) {
 
 	// Hard-link assets + generate the project/sourcemap, but let `darklua --watch`
 	// own the .luau build so we don't pay the full one-shot cost twice.
-	prepareOut(rworkBuild, {
+	const projectFlags = {
 		includeWorkspace: false,
 		includeServerStorage: envConfig.includeServerStorageWhenSyncing,
 		includeAssets: envConfig.includeAssetsWhenSyncing,
+	};
+	prepareOut(rworkBuild, projectFlags);
+
+	// rojo serve and the sourcemap watcher read the copies in .rwork/<build>/, so an
+	// edit to build.project (a pull or merge on the same branch) would only land on
+	// restart. Rewrite the copies when it changes; rojo reloads them live. Watch the
+	// folder, not the file: git replaces the file, which ends a watch on the file itself.
+	const projectPath = resolve(rworkBuild.project);
+	let projectTimer: ReturnType<typeof setTimeout> | null = null;
+	const projectWatcher = watch(dirname(projectPath), (_, filename) => {
+		// Windows can report no filename. Check anyway: writeProjects is a no-op when
+		// nothing changed.
+		if (filename && filename !== basename(projectPath)) return;
+		if (projectTimer) clearTimeout(projectTimer);
+		// Editors and git write in bursts: settle first.
+		projectTimer = setTimeout(() => {
+			projectTimer = null;
+			try {
+				if (writeProjects(rworkBuild, projectFlags)) {
+					log.success(`[sync] ${rworkBuild.project} changed; regenerated the synced project`);
+				}
+			} catch (e) {
+				// Mid-edit JSON: keep the last good copies until the next save.
+				log.error(`[sync] ${rworkBuild.project} changed but couldn't be read: ${(e as Error).message}`);
+			}
+		}, 250);
 	});
 
 	// The compile pipeline (darklua --watch, the non-lua watcher, the sourcemap
@@ -165,6 +192,8 @@ export async function sync(rworkBuild: RworkBuild) {
 
 	// Cleanup
 	stopping = true;
+	projectWatcher.close();
+	if (projectTimer) clearTimeout(projectTimer);
 	sourcemap.proc?.kill();
 	await darkluaWatch?.stop();
 	if (branchInterval) clearInterval(branchInterval);

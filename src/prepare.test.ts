@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { prepareOut } from "./prepare";
+import { prepareOut, writeProjects } from "./prepare";
 
 let originalCwd: string;
 let originalRevision: string | undefined;
@@ -80,4 +80,22 @@ test("a project without ReplicatedStorage gets a stamp without owning unknown ch
 		},
 	});
 	expect(output.globIgnorePaths).toEqual(["**/*.rbxm", "**/*.rbxmx"]);
+});
+
+test("writeProjects rewrites the copies only when the project changed", () => {
+	const build = { name: "watch", project: "default.project.json" };
+	const flags = { includeWorkspace: false, includeServerStorage: false, includeAssets: true };
+	const project = {
+		name: "watch-test",
+		tree: { $className: "DataModel", ReplicatedFirst: { $path: "old" } },
+	};
+	writeFileSync("default.project.json", JSON.stringify(project));
+	prepareOut(build, flags);
+	expect(writeProjects(build, flags)).toBe(false);
+
+	project.tree.ReplicatedFirst = { first: { $path: "src/first" } } as never;
+	writeFileSync("default.project.json", JSON.stringify(project));
+	expect(writeProjects(build, flags)).toBe(true);
+	const output = JSON.parse(readFileSync(".rwork/watch/default.project.json", "utf8"));
+	expect(output.tree.ReplicatedFirst).toEqual({ first: { $path: join("..", "..", "src", "first") } });
 });
