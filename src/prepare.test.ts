@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, relative } from "path";
+import { buildDir, syncDir } from "./paths";
 import { prepareOut, writeProjects } from "./prepare";
 
 let originalCwd: string;
@@ -24,9 +25,9 @@ afterEach(() => {
 });
 
 test.each([
-	["build/publish", true],
-	["sync", false],
-] as const)("%s stamps the shared output while preserving authored storage", (_, includeWorkspace) => {
+	["build/publish", true, buildDir],
+	["sync", false, syncDir],
+] as const)("%s stamps its staged project while preserving authored storage", (_, includeWorkspace, stageOf) => {
 	const project = {
 		name: "stamp-test",
 		tree: {
@@ -42,16 +43,18 @@ test.each([
 		},
 	};
 	writeFileSync("default.project.json", JSON.stringify(project));
-	prepareOut({ name: "preview", project: "default.project.json" }, {
+	const build = { name: "preview", project: "default.project.json" };
+	const stage = stageOf(build);
+	prepareOut(build, {
 		includeWorkspace,
 		includeServerStorage: includeWorkspace,
 		includeAssets: true,
-	});
+	}, stage);
 
-	const output = JSON.parse(readFileSync(".rwork/preview/default.project.json", "utf8"));
+	const output = JSON.parse(readFileSync(join(stage, "default.project.json"), "utf8"));
 	expect(output.tree.ReplicatedStorage).toEqual({
 		...project.tree.ReplicatedStorage,
-		$path: join("..", "..", "storage"),
+		$path: join(relative(stage, "."), "storage"),
 		$attributes: { Custom: 42, RWORK_REVISION: "feature@1234567-dirty", RWORK_BUILD: "preview" },
 	});
 	expect(output.tree.Workspace).toEqual(includeWorkspace ? project.tree.Workspace : undefined);
@@ -68,7 +71,7 @@ test("a project without ReplicatedStorage gets a stamp without owning unknown ch
 		includeWorkspace: false,
 		includeServerStorage: false,
 		includeAssets: false,
-	});
+	}, ".rwork/dev");
 
 	const output = JSON.parse(readFileSync(".rwork/dev/default.project.json", "utf8"));
 	expect(output.tree).toEqual({
@@ -90,12 +93,12 @@ test("writeProjects rewrites the copies only when the project changed", () => {
 		tree: { $className: "DataModel", ReplicatedFirst: { $path: "old" } },
 	};
 	writeFileSync("default.project.json", JSON.stringify(project));
-	prepareOut(build, flags);
-	expect(writeProjects(build, flags)).toBe(false);
+	prepareOut(build, flags, ".rwork/watch");
+	expect(writeProjects(build, flags, ".rwork/watch")).toBe(false);
 
 	project.tree.ReplicatedFirst = { first: { $path: "src/first" } } as never;
 	writeFileSync("default.project.json", JSON.stringify(project));
-	expect(writeProjects(build, flags)).toBe(true);
+	expect(writeProjects(build, flags, ".rwork/watch")).toBe(true);
 	const output = JSON.parse(readFileSync(".rwork/watch/default.project.json", "utf8"));
 	expect(output.tree.ReplicatedFirst).toEqual({ first: { $path: join("..", "..", "src", "first") } });
 });

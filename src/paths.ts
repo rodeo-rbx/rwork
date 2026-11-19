@@ -1,6 +1,31 @@
 import { relative, join } from "path";
 
 /**
+ * Where `sync` stages a build: the project `rojo serve` serves and the tree its watchers keep
+ * current. While a sync runs, what it staged here is its own, and nothing else may rewrite it.
+ */
+export function syncDir(build: { name: string }): string {
+	return `.rwork/${build.name}`;
+}
+
+/**
+ * Where `build` and `publish` stage. Not syncDir: staging empties the staged tree before filling
+ * it, and a build's project differs from a sync's (Workspace is in it). Done in syncDir under a
+ * running sync, rojo serve passes both on to Studio: every synced script is removed, and
+ * Workspace arrives as an addition the plugin can't make. The stage sits inside syncDir because
+ * nothing a sync runs watches there: rojo serve watches the staged project and its $paths, and
+ * darklua only its own config and sourcemap.
+ */
+export function buildDir(build: { name: string }): string {
+	return join(syncDir(build), "build");
+}
+
+/** The place file `build` and `publish` produce. */
+export function placeFile(build: { name: string }): string {
+	return join(syncDir(build), "build.rbxl");
+}
+
+/**
  * Walk a project JSON tree and remap $path values for a new cwd.
  *
  * - Computes relative prefix from outputDir back to "." (e.g., "../../" for ".rwork/dev")

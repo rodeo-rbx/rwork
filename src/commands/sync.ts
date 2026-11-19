@@ -2,13 +2,14 @@ import { readFileSync, watch } from "fs";
 import { basename, dirname, resolve } from "path";
 import type { RworkBuild } from "../config";
 import { envConfig } from "../config";
+import { syncDir } from "../paths";
 import { prepareOut, writeProjects } from "../prepare";
 import { pruneStaleLuau, startWatch } from "../sync-engine";
 import { startDarkluaWatch, type DarkluaWatch } from "../darklua-watch";
 import { log } from "../log";
 
 export async function sync(rworkBuild: RworkBuild) {
-	const cwd = `.rwork/${rworkBuild.name}`;
+	const cwd = syncDir(rworkBuild);
 	const src = rworkBuild.src;
 	const darkluaConfig = `${cwd}/darklua.json`;
 
@@ -26,7 +27,7 @@ export async function sync(rworkBuild: RworkBuild) {
 		includeServerStorage: envConfig.includeServerStorageWhenSyncing,
 		includeAssets: envConfig.includeAssetsWhenSyncing,
 	};
-	prepareOut(rworkBuild, projectFlags);
+	prepareOut(rworkBuild, projectFlags, cwd);
 
 	// rojo serve and the sourcemap watcher read the copies in .rwork/<build>/, so an
 	// edit to build.project (a pull or merge on the same branch) would only land on
@@ -43,7 +44,7 @@ export async function sync(rworkBuild: RworkBuild) {
 		projectTimer = setTimeout(() => {
 			projectTimer = null;
 			try {
-				if (writeProjects(rworkBuild, projectFlags)) {
+				if (writeProjects(rworkBuild, projectFlags, cwd)) {
 					log.success(`[sync] ${rworkBuild.project} changed; regenerated the synced project`);
 				}
 			} catch (e) {

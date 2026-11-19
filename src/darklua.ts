@@ -45,8 +45,7 @@ function rewriteSourcemapPaths(rules: (DarkluaRule | string)[]) {
 	}
 }
 
-export function prepareDarklua(build: RworkBuild): string {
-	const outputDir = `.rwork/${build.name}`;
+export function prepareDarklua(build: RworkBuild, outputDir: string): string {
 	const configPath = `${outputDir}/darklua.json`;
 
 	let config: DarkluaConfig;

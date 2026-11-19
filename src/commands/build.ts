@@ -1,23 +1,27 @@
+import { resolve } from "path";
 import type { RworkBuild } from "../config";
+import { buildDir, placeFile } from "../paths";
 import { prepareOut, runDarkluaOnce } from "../prepare";
 import { openStudio } from "../studio";
 import { log } from "../log";
 
 export function build(rworkBuild: RworkBuild, options?: { open?: boolean }) {
 	const startTime = performance.now();
-	const cwd = `.rwork/${rworkBuild.name}`;
+	// Its own stage: a sync of this build may be running, serving syncDir.
+	const stage = buildDir(rworkBuild);
+	const place = placeFile(rworkBuild);
 
 	log.info("Preparing out files...");
 	prepareOut(rworkBuild, {
 		includeWorkspace: true,
 		includeServerStorage: true,
 		includeAssets: true,
-	});
-	runDarkluaOnce(rworkBuild);
+	}, stage);
+	runDarkluaOnce(rworkBuild, stage);
 
 	log.info("Building the place file...");
-	const proc = Bun.spawnSync(["rojo", "build", "-o", "build.rbxl"], {
-		cwd,
+	const proc = Bun.spawnSync(["rojo", "build", "-o", resolve(place)], {
+		cwd: stage,
 		stdio: ["inherit", "inherit", "inherit"],
 	});
 	if (proc.exitCode !== 0) {
@@ -26,9 +30,9 @@ export function build(rworkBuild: RworkBuild, options?: { open?: boolean }) {
 	}
 
 	const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
-	log.success(`Successfully built ${cwd}/build.rbxl in ${elapsed}s`);
+	log.success(`Successfully built ${place} in ${elapsed}s`);
 
 	if (options?.open) {
-		openStudio(`${cwd}/build.rbxl`);
+		openStudio(place);
 	}
 }

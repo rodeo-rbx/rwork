@@ -84,6 +84,9 @@ rwork publish --place <id>   # build + upload to a live place
 
 `--open` opens the result in Studio: the built file for `build`, the live place for `publish`.
 
+`build` and `publish` stage in `.rwork/<build>/build/`, apart from the project and tree `sync`
+serves from `.rwork/<build>/`, so either can run while a sync of the same build is live.
+
 ### Build stamp
 
 Every command stamps two attributes on `ReplicatedStorage` so a place can be

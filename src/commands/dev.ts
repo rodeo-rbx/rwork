@@ -1,4 +1,5 @@
 import type { RworkBuild } from "../config";
+import { placeFile } from "../paths";
 import { build } from "./build";
 import { publish } from "./publish";
 import { sync } from "./sync";
@@ -21,7 +22,7 @@ export async function dev(rworkBuild: RworkBuild, place?: string, options: { upl
 	} else {
 		// Local mode: build the place file and open it.
 		build(rworkBuild);
-		openStudio(`.rwork/${rworkBuild.name}/build.rbxl`);
+		openStudio(placeFile(rworkBuild));
 	}
 	log.success(
 		"Build ready! You must enable HttpService and DataStoreService in Experience Settings after publishing to ensure the build works as expected.",

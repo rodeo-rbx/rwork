@@ -1,7 +1,8 @@
 import { writeFileSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import type { RworkBuild } from "../config";
+import { buildDir, placeFile } from "../paths";
 import { prepareOut, runDarkluaOnce } from "../prepare";
 import { openStudio } from "../studio";
 import { log } from "../log";
@@ -32,12 +33,12 @@ async function resolveUniverse(place: string): Promise<string> {
 // HTTP client stalls and times out on large place uploads (rojo sets no timeout,
 // and its reqwest transport hangs); rojo's *build* is fine, and a plain fetch
 // with a Content-Length body publishes reliably.
-async function publishViaOpenCloud(cwd: string, place: string, apiKey: string) {
+async function publishViaOpenCloud(stage: string, file: string, place: string, apiKey: string) {
 	const universe = await resolveUniverse(place);
 
 	log.info("Building the place file...");
-	const proc = Bun.spawnSync(["rojo", "build", "-o", "build.rbxl"], {
-		cwd,
+	const proc = Bun.spawnSync(["rojo", "build", "-o", resolve(file)], {
+		cwd: stage,
 		stdio: ["inherit", "inherit", "inherit"],
 	});
 	if (proc.exitCode !== 0) {
@@ -77,7 +78,7 @@ async function publishViaOpenCloud(cwd: string, place: string, apiKey: string) {
 				"-X", "POST",
 				"-H", `@${headerFile}`,
 				"-H", "Content-Type: application/octet-stream",
-				"--data-binary", `@${cwd}/build.rbxl`,
+				"--data-binary", `@${file}`,
 				"-o", responseFile,
 				"-w", "%{http_code}",
 				url,
@@ -114,24 +115,25 @@ export async function publish(
 	options?: { open?: boolean },
 ) {
 	const startTime = performance.now();
-	const cwd = `.rwork/${rworkBuild.name}`;
+	// Its own stage: a sync of this build may be running, serving syncDir.
+	const stage = buildDir(rworkBuild);
 
 	log.info("Preparing out files...");
 	prepareOut(rworkBuild, {
 		includeWorkspace: true,
 		includeServerStorage: true,
 		includeAssets: true,
-	});
-	runDarkluaOnce(rworkBuild);
+	}, stage);
+	runDarkluaOnce(rworkBuild, stage);
 
 	const apiKey = process.env.RWORK_API_KEY;
 	if (apiKey) {
-		await publishViaOpenCloud(cwd, place, apiKey);
+		await publishViaOpenCloud(stage, placeFile(rworkBuild), place, apiKey);
 	} else {
 		// No API key: fall back to rojo's cookie auth, which builds + uploads.
 		log.info(`Publishing to place ${place} via cookie auth...`);
 		const proc = Bun.spawnSync(["rojo", "upload", "--asset_id", place], {
-			cwd,
+			cwd: stage,
 			stdio: ["inherit", "inherit", "inherit"],
 		});
 		if (proc.exitCode !== 0) {
@@ -141,7 +143,7 @@ export async function publish(
 	}
 
 	const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
-	log.success(`Published ${cwd} to place ${place} in ${elapsed}s`);
+	log.success(`Published ${stage} to place ${place} in ${elapsed}s`);
 
 	if (options?.open) {
 		openStudio(place);

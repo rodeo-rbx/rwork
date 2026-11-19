@@ -92,11 +92,10 @@ function runSourcemapRegen(outputDir: string) {
 
 export { runDarklua, runSourcemapRegen };
 
-/** Writes .rwork/<build>/default.project.json (and sourcemap.project.json when there's a
+/** Writes <outputDir>/default.project.json (and sourcemap.project.json when there's a
  *  src) from build.project. Returns whether either file changed. prepareOut runs it once;
  *  sync runs it again whenever build.project changes. Throws on unreadable JSON. */
-export function writeProjects(build: RworkBuild, flags: PrepareOutFlags): boolean {
-	const outputDir = `.rwork/${build.name}`;
+export function writeProjects(build: RworkBuild, flags: PrepareOutFlags, outputDir: string): boolean {
 	const srcFolder = build.src;
 	const baseFile = JSON.parse(readFileSync(build.project, "utf-8"));
 
@@ -141,21 +140,23 @@ export function writeProjects(build: RworkBuild, flags: PrepareOutFlags): boolea
 	return changed;
 }
 
-export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
-	const outputDir = `.rwork/${build.name}`;
+/** Stages a build in outputDir: syncDir for sync, buildDir for build and publish (paths.ts says
+ *  why they differ). The staged tree is emptied before it is filled, so outputDir must be a
+ *  directory nothing is serving. */
+export function prepareOut(build: RworkBuild, flags: PrepareOutFlags, outputDir: string) {
 	const srcFolder = build.src;
 
 	if (!existsSync(outputDir)) {
 		mkdirSync(outputDir, { recursive: true });
 	}
 
-	// Generate darklua config in .rwork/<build>/darklua.json (only when there's
+	// Generate darklua config in <outputDir>/darklua.json (only when there's
 	// something to compile)
 	if (srcFolder) {
-		prepareDarklua(build);
+		prepareDarklua(build, outputDir);
 	}
 
-	writeProjects(build, flags);
+	writeProjects(build, flags, outputDir);
 
 	// Everything below exists to feed darklua: the sourcemap drives
 	// convert_require, and initialSync stages src's non-lua assets. With no src
@@ -175,10 +176,9 @@ export function prepareOut(build: RworkBuild, flags: PrepareOutFlags) {
 	runSourcemapRegen(outputDir);
 }
 
-/** Compile .luau once over the prepared tree (one-shot). build/publish use this;
- *  sync runs `darklua --watch` instead. No-op for src-less builds. */
-export function runDarkluaOnce(build: RworkBuild) {
+/** Compile .luau once over the tree prepareOut staged in outputDir (one-shot). build/publish
+ *  use this; sync runs `darklua --watch` instead. No-op for src-less builds. */
+export function runDarkluaOnce(build: RworkBuild, outputDir: string) {
 	if (!build.src) return;
-	const outputDir = `.rwork/${build.name}`;
 	runDarklua(build.src, join(outputDir, build.src), `${outputDir}/darklua.json`);
 }
