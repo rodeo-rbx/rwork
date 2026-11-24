@@ -102,3 +102,27 @@ test("writeProjects rewrites the copies only when the project changed", () => {
 	const output = JSON.parse(readFileSync(".rwork/watch/default.project.json", "utf8"));
 	expect(output.tree.ReplicatedFirst).toEqual({ first: { $path: join("..", "..", "src", "first") } });
 });
+
+// A live sync (`rwork dev --place`) lists its place in the served project's servePlaceIds, so the
+// Rojo plugin connects from that place only. A local sync serves build.rbxl (PlaceId 0) and lists none.
+test("a live sync's place joins the served project's servePlaceIds, and a local sync adds none", () => {
+	writeFileSync("default.project.json", JSON.stringify({ name: "live", servePlaceIds: [111], tree: { $className: "DataModel" } }));
+	const build = { name: "dev", project: "default.project.json" };
+	const stage = syncDir(build);
+	const flags = { includeWorkspace: false, includeServerStorage: false, includeAssets: false };
+	const served = () => JSON.parse(readFileSync(join(stage, "default.project.json"), "utf8")).servePlaceIds;
+
+	prepareOut(build, flags, stage);
+	expect(served()).toEqual([111]);
+
+	prepareOut(build, { ...flags, servePlaceId: "222" }, stage);
+	expect(served()).toEqual([111, 222]);
+	// already listed: not twice
+	prepareOut(build, { ...flags, servePlaceId: "111" }, stage);
+	expect(served()).toEqual([111]);
+
+	writeFileSync("default.project.json", JSON.stringify({ name: "live", tree: { $className: "DataModel" } }));
+	prepareOut(build, { ...flags, servePlaceId: "222" }, stage);
+	expect(served()).toEqual([222]);
+	expect(() => prepareOut(build, { ...flags, servePlaceId: "my-place" }, stage)).toThrow("not a positive whole number");
+});

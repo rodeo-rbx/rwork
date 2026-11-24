@@ -6,9 +6,19 @@ import { syncDir } from "../paths";
 import { prepareOut, writeProjects } from "../prepare";
 import { pruneStaleLuau, startWatch } from "../sync-engine";
 import { startDarkluaWatch, type DarkluaWatch } from "../darklua-watch";
+import { rojoProjectAt, serveEndpoint, serveUrl, waitForServe } from "../serve-ready";
 import { log } from "../log";
 
-export async function sync(rworkBuild: RworkBuild) {
+export interface SyncOptions {
+	/** Runs once, when the first rojo serve answers: `rwork dev` opens Studio here, so
+	 *  the Rojo plugin finds the server as it loads (its Auto Reconnect checks only then). */
+	onServing?: () => Promise<void> | void;
+	/** The live place this sync is for (`rwork dev --place`): the served project lists it
+	 *  in servePlaceIds. Left out for a local build.rbxl, whose PlaceId is 0. */
+	placeId?: string;
+}
+
+export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 	const cwd = syncDir(rworkBuild);
 	const src = rworkBuild.src;
 	const darkluaConfig = `${cwd}/darklua.json`;
@@ -26,6 +36,7 @@ export async function sync(rworkBuild: RworkBuild) {
 		includeWorkspace: false,
 		includeServerStorage: envConfig.includeServerStorageWhenSyncing,
 		includeAssets: envConfig.includeAssetsWhenSyncing,
+		servePlaceId: options.placeId,
 	};
 	prepareOut(rworkBuild, projectFlags, cwd);
 
@@ -168,17 +179,53 @@ export async function sync(rworkBuild: RworkBuild) {
 		serveArgs.push("--port", envConfig.syncPort);
 	}
 
+	// onServing waits for this sync's own server. A server already on the port (another
+	// sync, another project) would answer the wait while ours fails to bind, so check
+	// before ours starts: it then gives up on its own, and nothing is opened against it.
+	const endpoint = serveEndpoint(cwd, envConfig.syncPort);
+	const baseUrl = serveUrl(endpoint);
+	let onServing = options.onServing;
+	if (onServing) {
+		const already = await rojoProjectAt(baseUrl);
+		if (already !== null) {
+			log.error(
+				`[sync] A Rojo server for '${already}' is already on ${endpoint.address}:${endpoint.port}; not opening Studio against it (stop it, or set RWORK_SYNC_PORT)`,
+			);
+			onServing = undefined;
+		}
+	}
+
 	let exitCode: number;
 	let fastCrashes = 0;
+	// The serve now running, for the wait below to follow across respawns.
+	const serve: { proc: ReturnType<typeof Bun.spawn> | null } = { proc: null };
 	for (;;) {
 		const startedAt = Date.now();
 		const serveProc = Bun.spawn(serveArgs, {
 			cwd,
 			stdio: ["inherit", "inherit", "inherit"],
 		});
+		serve.proc = serveProc;
 		log.diag(
 			`rojo serve spawned (pid=${serveProc.pid}${envConfig.syncPort ? ` port=${envConfig.syncPort}` : ""})`,
 		);
+		if (onServing) {
+			// Once: a respawn after a crash serves the Studio that is already open.
+			const run = onServing;
+			onServing = undefined;
+			void (async () => {
+				const waited = await waitForServe({
+					baseUrl,
+					alive: () => serve.proc?.exitCode === null,
+					stopped: () => stopping,
+				});
+				if (waited === "stopped") return;
+				if (waited === "timeout") {
+					log.warn(`[sync] rojo serve didn't answer at ${baseUrl} within 2 minutes; opening Studio anyway`);
+				}
+				await run();
+			})();
+		}
 		exitCode = await serveProc.exited;
 		log.diag(`rojo serve exited code=${exitCode}`);
 		if (exitCode === 0) break;

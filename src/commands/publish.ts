@@ -146,6 +146,6 @@ export async function publish(
 	log.success(`Published ${stage} to place ${place} in ${elapsed}s`);
 
 	if (options?.open) {
-		openStudio(place);
+		await openStudio(place);
 	}
 }

@@ -78,11 +78,15 @@ rule, so it may also hold a place name).
 ```sh
 rwork build [--open]    # compile + build → .rwork/<build>/build.rbxl
 rwork sync              # live-sync source into an open Studio (rojo serve + watchers)
-rwork dev               # build + open + sync — the local iteration loop
+rwork dev               # build + sync, then open in Studio once rojo serve is up — the local iteration loop
 rwork publish --place <id>   # build + upload to a live place
 ```
 
 `--open` opens the result in Studio: the built file for `build`, the live place for `publish`.
+
+`dev` opens Studio only after its `rojo serve` answers, so the Rojo plugin finds the server as
+Studio loads (its Auto Reconnect checks then). If another Rojo server already holds the port, `dev`
+says which project it serves and doesn't open Studio against it.
 
 `build` and `publish` stage in `.rwork/<build>/build/`, apart from the project and tree `sync`
 serves from `.rwork/<build>/`, so either can run while a sync of the same build is live.
@@ -117,6 +121,10 @@ rwork dev --place <id|name>              # open the published place + sync into 
 rwork dev --place <id|name> --upload     # publish a fresh build + open + sync
 rwork publish --place <id|name> --open   # publish and open, no sync loop
 ```
+
+In live mode `dev` adds the place to the served project's `servePlaceIds`, so the Rojo plugin
+syncs into that place only. With Rojo's confirmation setting at "Unlisted PlaceId", the first sync
+there needs no confirmation.
 
 ## Environment
 

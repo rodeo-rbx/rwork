@@ -12,6 +12,10 @@ export interface PrepareOutFlags {
 	includeWorkspace: boolean;
 	includeServerStorage: boolean;
 	includeAssets: boolean;
+	/** A live sync's place: added to the served project's servePlaceIds, so the Rojo
+	 *  plugin connects from that place only (and its "Unlisted PlaceId" confirmation
+	 *  setting skips the first-sync prompt there). */
+	servePlaceId?: string;
 }
 
 function mergeGlobIgnores(
@@ -114,6 +118,16 @@ export function writeProjects(build: RworkBuild, flags: PrepareOutFlags, outputD
 	const attributes = (storage.$attributes ??= {}) as Record<string, unknown>;
 	attributes.RWORK_BUILD = build.name;
 	attributes.RWORK_REVISION = revision;
+
+	if (flags.servePlaceId !== undefined) {
+		const id = Number(flags.servePlaceId);
+		if (!Number.isSafeInteger(id) || id <= 0) {
+			throw new Error(`place id ${flags.servePlaceId} is not a positive whole number`);
+		}
+		// Kept beside any the project lists itself, which still name places it may sync.
+		const listed = Array.isArray(outputProject.servePlaceIds) ? (outputProject.servePlaceIds as unknown[]) : [];
+		if (!listed.includes(id)) outputProject.servePlaceIds = [...listed, id];
+	}
 
 	mutatePaths(outputProject, outputDir, srcFolder);
 	let changed = writeProjectFile(

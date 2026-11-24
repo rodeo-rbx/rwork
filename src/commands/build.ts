@@ -5,7 +5,7 @@ import { prepareOut, runDarkluaOnce } from "../prepare";
 import { openStudio } from "../studio";
 import { log } from "../log";
 
-export function build(rworkBuild: RworkBuild, options?: { open?: boolean }) {
+export async function build(rworkBuild: RworkBuild, options?: { open?: boolean }) {
 	const startTime = performance.now();
 	// Its own stage: a sync of this build may be running, serving syncDir.
 	const stage = buildDir(rworkBuild);
@@ -33,6 +33,6 @@ export function build(rworkBuild: RworkBuild, options?: { open?: boolean }) {
 	log.success(`Successfully built ${place} in ${elapsed}s`);
 
 	if (options?.open) {
-		openStudio(place);
+		await openStudio(place);
 	}
 }

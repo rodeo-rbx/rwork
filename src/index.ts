@@ -87,8 +87,8 @@ function withBuildOptions(cmd: Command) {
 withBuildOptions(program.command("build"))
 	.description("Compile + build a place file into .rwork/<build>/build.rbxl")
 	.option("-o, --open", "open the built place in Studio")
-	.action((opts, cmd) => {
-		build(resolveBuild(opts, cmd), { open: opts.open });
+	.action(async (opts, cmd) => {
+		await build(resolveBuild(opts, cmd), { open: opts.open });
 	});
 
 withBuildOptions(program.command("sync"))
