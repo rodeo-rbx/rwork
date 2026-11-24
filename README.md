@@ -42,7 +42,7 @@ darklua = ".darklua/prod.darklua.json"
 __DEV_TOOLS__ = false
 ```
 
-Select one with `--build <name>` (default `dev`).
+Select one with `--build <name>` (default: `default_build`, else `dev`).
 
 ### Named places
 
@@ -71,7 +71,38 @@ rwork publish --place staging --build dev   # error: conflicts with bound build 
 
 `RWORK_PLACE_ID` stays the per-developer scratch target: point it at your own
 place and any build publishes there without flags (it resolves through the same
-rule, so it may also hold a place name).
+rule, so it may also hold a place name). `default_place` in `rwork.local.toml`
+does the same from a file (below).
+
+### Your own settings: `rwork.local.toml`
+
+A `rwork.local.toml` beside `rwork.toml` holds one developer's settings. It has the
+same layout as `rwork.toml` and is merged over it table by table, so it can add
+places and builds or change a single global. Keep it out of git (rwork warns when
+git would commit it); each worktree has its own.
+
+```toml
+default_build = "dev"   # the build without --build (and no place binding one)
+default_place = "mine"  # the place without --place: a [places.*] name or a raw id
+
+[places.mine]           # a personal scratch place
+id = 1234567890
+build = "dev"
+
+[build.dev.globals]     # your own globals, without -G on every run
+__DEBUG__ = true
+
+[sync]
+port = 34900                   # rojo serve's port during sync
+include_assets = true
+include_server_storage = true
+```
+
+`default_build`, `default_place` and `[sync]` can go in `rwork.toml` too, as shared
+defaults. Precedence, highest first: command-line flags, environment variables,
+`rwork.local.toml`, `rwork.toml`. A build's summary marks each setting that came
+from `rwork.local.toml` or a `-G` flag. Secrets such as `RWORK_API_KEY` stay in the
+environment (or `.env`), not in either file.
 
 ## Commands
 
@@ -114,7 +145,7 @@ During sync the stamp is taken once at startup; restart sync to refresh it.
 
 ### Live places
 
-Pass `--place <id|name>` (or set `RWORK_PLACE_ID`) to work against a real Roblox place instead of a local file:
+Pass `--place <id|name>` (or set `RWORK_PLACE_ID` or `default_place`) to work against a real Roblox place instead of a local file:
 
 ```sh
 rwork dev --place <id|name>              # open the published place + sync into it
@@ -128,13 +159,15 @@ there needs no confirmation.
 
 ## Environment
 
-- `RWORK_PLACE_ID` — default live place (a raw id or a `[places.*]` name); meant as each dev's personal scratch place
+Each of these wins over the matching setting in `rwork.local.toml` / `rwork.toml`.
+
+- `RWORK_PLACE_ID` — default live place (a raw id or a `[places.*]` name); meant as each dev's personal scratch place (`default_place` in a file)
 - `RWORK_API_KEY` — Open Cloud key for publishing (place-publishing scope)
 - `RWORK_UNIVERSE_ID` — override the auto-resolved universe id when publishing
 - `RWORK_REVISION` — override the stamped revision (see Build stamp); by default it comes from `GITHUB_SHA`/`GITHUB_REF_NAME` on GitHub Actions, otherwise from `git`
 - `RWORK_DIAG=1` — verbose diagnostic logging
-- `RWORK_INCLUDE_ASSETS_WHEN_SYNCING` / `RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING` — set `false` to exclude during sync
-- `RWORK_SYNC_PORT` — port for `rojo serve` during sync (rojo's default when unset). Sync also auto-restarts rojo if it crashes (repeated immediate crashes give up).
+- `RWORK_INCLUDE_ASSETS_WHEN_SYNCING` / `RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING` — set `false` to exclude during sync (`[sync] include_assets` / `include_server_storage`)
+- `RWORK_SYNC_PORT` — port for `rojo serve` during sync (`[sync] port`; the project's `servePort`, else rojo's default, when unset). Sync also auto-restarts rojo if it crashes (repeated immediate crashes give up).
 
 ## License
 

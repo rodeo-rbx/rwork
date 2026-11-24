@@ -1,7 +1,7 @@
 import { readFileSync, watch } from "fs";
 import { basename, dirname, resolve } from "path";
 import type { RworkBuild } from "../config";
-import { envConfig } from "../config";
+import { syncSettings } from "../config";
 import { syncDir } from "../paths";
 import { prepareOut, writeProjects } from "../prepare";
 import { pruneStaleLuau, startWatch } from "../sync-engine";
@@ -21,6 +21,7 @@ export interface SyncOptions {
 export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 	const cwd = syncDir(rworkBuild);
 	const src = rworkBuild.src;
+	const settings = syncSettings();
 	const darkluaConfig = `${cwd}/darklua.json`;
 
 	log.warn(
@@ -34,8 +35,8 @@ export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 	// own the .luau build so we don't pay the full one-shot cost twice.
 	const projectFlags = {
 		includeWorkspace: false,
-		includeServerStorage: envConfig.includeServerStorageWhenSyncing,
-		includeAssets: envConfig.includeAssetsWhenSyncing,
+		includeServerStorage: settings.includeServerStorage,
+		includeAssets: settings.includeAssets,
 		servePlaceId: options.placeId,
 	};
 	prepareOut(rworkBuild, projectFlags, cwd);
@@ -168,28 +169,29 @@ export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 
 	// rojo serve — main loop. Async so the event loop stays free for the fs.watch
 	// callbacks, the branch-switch interval, and the darklua output pumps.
-	// RWORK_SYNC_PORT overrides rojo's default port. A non-zero exit respawns the
+	// The sync port (RWORK_SYNC_PORT, else [sync] port in rwork.local.toml or rwork.toml)
+	// overrides rojo's default port. A non-zero exit respawns the
 	// server — rojo can panic on transient fs events (e.g. pesde writes temporary
 	// .git objects into roblox_packages while applying patches; rojo 7.7 panics
 	// canonicalizing the already-deleted path) and the sync should survive that.
 	// Repeated immediate crashes (port taken, broken project) give up instead of
 	// loop-crashing.
 	const serveArgs = ["rojo", "serve"];
-	if (envConfig.syncPort) {
-		serveArgs.push("--port", envConfig.syncPort);
+	if (settings.port) {
+		serveArgs.push("--port", settings.port);
 	}
 
 	// onServing waits for this sync's own server. A server already on the port (another
 	// sync, another project) would answer the wait while ours fails to bind, so check
 	// before ours starts: it then gives up on its own, and nothing is opened against it.
-	const endpoint = serveEndpoint(cwd, envConfig.syncPort);
+	const endpoint = serveEndpoint(cwd, settings.port);
 	const baseUrl = serveUrl(endpoint);
 	let onServing = options.onServing;
 	if (onServing) {
 		const already = await rojoProjectAt(baseUrl);
 		if (already !== null) {
 			log.error(
-				`[sync] A Rojo server for '${already}' is already on ${endpoint.address}:${endpoint.port}; not opening Studio against it (stop it, or set RWORK_SYNC_PORT)`,
+				`[sync] A Rojo server for '${already}' is already on ${endpoint.address}:${endpoint.port}; not opening Studio against it (stop it, or give this sync another port: [sync] port in rwork.local.toml, or RWORK_SYNC_PORT)`,
 			);
 			onServing = undefined;
 		}
@@ -207,7 +209,7 @@ export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 		});
 		serve.proc = serveProc;
 		log.diag(
-			`rojo serve spawned (pid=${serveProc.pid}${envConfig.syncPort ? ` port=${envConfig.syncPort}` : ""})`,
+			`rojo serve spawned (pid=${serveProc.pid}${settings.port ? ` port=${settings.port}` : ""})`,
 		);
 		if (onServing) {
 			// Once: a respawn after a crash serves the Studio that is already open.

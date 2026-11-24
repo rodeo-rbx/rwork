@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { parseRworkConfig, lookupPlace } from "./config";
+import { defaultBuildName, defaultPlace, lookupPlace, parseRworkConfig } from "./config";
 import { build } from "./commands/build";
 import { sync } from "./commands/sync";
 import { dev } from "./commands/dev";
@@ -32,18 +32,19 @@ interface PlaceTarget {
 }
 
 // Uniform --place resolution, identical for every command that takes it:
-// a [places.*] key from rwork.toml resolves to that entry; anything else is a
-// raw place id. The flag falls back to RWORK_PLACE_ID (a dev's personal
-// scratch place) through the same rule.
+// a [places.*] key from rwork.toml (or rwork.local.toml) resolves to that
+// entry; anything else is a raw place id. The flag falls back to
+// RWORK_PLACE_ID, then default_place (a dev's personal scratch place, best in
+// rwork.local.toml), through the same rule.
 function resolveTarget(place?: string): PlaceTarget | undefined {
-	const arg = place ?? process.env.RWORK_PLACE_ID;
+	const arg = place ?? process.env.RWORK_PLACE_ID ?? defaultPlace();
 	if (!arg) return undefined;
 	return lookupPlace(arg) ?? { id: arg };
 }
 
 // The build a command runs with: an explicit --build wins but must agree
 // with the target place's bound build; otherwise the binding is the
-// default, then "dev".
+// default, then default_build (rwork.local.toml over rwork.toml), then "dev".
 function resolveBuildName(opts: BuildOpts, cmd: Command, target?: PlaceTarget): string {
 	const explicit =
 		cmd.getOptionValueSource("build") === "cli" ? opts.build : undefined;
@@ -54,7 +55,7 @@ function resolveBuildName(opts: BuildOpts, cmd: Command, target?: PlaceTarget): 
 		);
 		process.exit(1);
 	}
-	return explicit ?? target?.build ?? opts.build;
+	return explicit ?? target?.build ?? defaultBuildName() ?? opts.build;
 }
 
 // Resolve the shared build-selection options into an RworkBuild.
