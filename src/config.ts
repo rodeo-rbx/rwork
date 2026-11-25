@@ -40,6 +40,7 @@ interface TomlSync {
 	port?: number | string;
 	include_assets?: boolean;
 	include_server_storage?: boolean;
+	include_workspace?: boolean;
 }
 
 interface RworkToml {
@@ -124,6 +125,8 @@ function envFlag(name: string): boolean | undefined {
 export interface SyncSettings {
 	includeAssets: boolean;
 	includeServerStorage: boolean;
+	/** Serve the project's Workspace too (off: a sync leaves the place's own Workspace alone). */
+	includeWorkspace: boolean;
 	/** Port for `rojo serve` during sync; the project's servePort, else rojo's default, when unset. */
 	port?: string;
 }
@@ -136,6 +139,7 @@ export function syncSettings(): SyncSettings {
 		includeAssets: envFlag("RWORK_INCLUDE_ASSETS_WHEN_SYNCING") ?? sync.include_assets ?? true,
 		includeServerStorage:
 			envFlag("RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING") ?? sync.include_server_storage ?? true,
+		includeWorkspace: envFlag("RWORK_INCLUDE_WORKSPACE_WHEN_SYNCING") ?? sync.include_workspace ?? false,
 		port: process.env.RWORK_SYNC_PORT ?? (sync.port !== undefined ? String(sync.port) : undefined),
 	};
 }

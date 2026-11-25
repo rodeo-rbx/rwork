@@ -96,6 +96,7 @@ __DEBUG__ = true
 port = 34900                   # rojo serve's port during sync
 include_assets = true
 include_server_storage = true
+include_workspace = false      # serve the project's Workspace too
 ```
 
 `default_build`, `default_place` and `[sync]` can go in `rwork.toml` too, as shared
@@ -167,6 +168,7 @@ Each of these wins over the matching setting in `rwork.local.toml` / `rwork.toml
 - `RWORK_REVISION` — override the stamped revision (see Build stamp); by default it comes from `GITHUB_SHA`/`GITHUB_REF_NAME` on GitHub Actions, otherwise from `git`
 - `RWORK_DIAG=1` — verbose diagnostic logging
 - `RWORK_INCLUDE_ASSETS_WHEN_SYNCING` / `RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING` — set `false` to exclude during sync (`[sync] include_assets` / `include_server_storage`)
+- `RWORK_INCLUDE_WORKSPACE_WHEN_SYNCING` — set `true` to serve the project's Workspace during sync too (`[sync] include_workspace`; off by default, so a sync leaves the place's own Workspace alone)
 - `RWORK_SYNC_PORT` — port for `rojo serve` during sync (`[sync] port`; the project's `servePort`, else rojo's default, when unset). Sync also auto-restarts rojo if it crashes (repeated immediate crashes give up).
 
 ## License

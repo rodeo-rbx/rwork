@@ -34,7 +34,7 @@ export async function sync(rworkBuild: RworkBuild, options: SyncOptions = {}) {
 	// Hard-link assets + generate the project/sourcemap, but let `darklua --watch`
 	// own the .luau build so we don't pay the full one-shot cost twice.
 	const projectFlags = {
-		includeWorkspace: false,
+		includeWorkspace: settings.includeWorkspace,
 		includeServerStorage: settings.includeServerStorage,
 		includeAssets: settings.includeAssets,
 		servePlaceId: options.placeId,

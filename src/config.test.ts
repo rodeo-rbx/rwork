@@ -37,7 +37,7 @@ src = "src"
 include_assets = false
 `;
 
-const ENV = ["RWORK_PLACE_ID", "RWORK_SYNC_PORT", "RWORK_INCLUDE_ASSETS_WHEN_SYNCING", "RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING"];
+const ENV = ["RWORK_PLACE_ID", "RWORK_SYNC_PORT", "RWORK_INCLUDE_ASSETS_WHEN_SYNCING", "RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING", "RWORK_INCLUDE_WORKSPACE_WHEN_SYNCING"];
 let originalCwd: string;
 let savedEnv: Record<string, string | undefined>;
 let dir: string;
@@ -80,7 +80,7 @@ test("without rwork.local.toml, rwork.toml is read as before", () => {
 	expect(parseRworkConfig("dev").globals).toEqual({ __BUILD__: "dev", __DEBUG__: false });
 	expect(defaultBuildName()).toBe("dev");
 	expect(defaultPlace()).toBeUndefined();
-	expect(syncSettings()).toEqual({ includeAssets: false, includeServerStorage: true, port: undefined });
+	expect(syncSettings()).toEqual({ includeAssets: false, includeServerStorage: true, includeWorkspace: false, port: undefined });
 });
 
 test("rwork.local.toml adds places and builds, overrides globals, and the summary says which came from it", () => {
@@ -112,13 +112,14 @@ __DEBUG__ = true
 });
 
 test("sync settings: an environment variable, else rwork.local.toml, else rwork.toml, else the default", () => {
-	writeFileSync("rwork.local.toml", `[sync]\nport = 34900\ninclude_server_storage = false\n`);
-	expect(syncSettings()).toEqual({ includeAssets: false, includeServerStorage: false, port: "34900" });
+	writeFileSync("rwork.local.toml", `[sync]\nport = 34900\ninclude_server_storage = false\ninclude_workspace = true\n`);
+	expect(syncSettings()).toEqual({ includeAssets: false, includeServerStorage: false, includeWorkspace: true, port: "34900" });
 
 	process.env.RWORK_SYNC_PORT = "35000";
 	process.env.RWORK_INCLUDE_ASSETS_WHEN_SYNCING = "true";
 	process.env.RWORK_INCLUDE_SERVER_STORAGE_WHEN_SYNCING = "yes";
-	expect(syncSettings()).toEqual({ includeAssets: true, includeServerStorage: true, port: "35000" });
+	process.env.RWORK_INCLUDE_WORKSPACE_WHEN_SYNCING = "false";
+	expect(syncSettings()).toEqual({ includeAssets: true, includeServerStorage: true, includeWorkspace: false, port: "35000" });
 });
 
 test("git says whether rwork.local.toml is ignored, and there is no answer outside a repo", () => {
