@@ -163,7 +163,7 @@ there needs no confirmation.
 Each of these wins over the matching setting in `rwork.local.toml` / `rwork.toml`.
 
 - `RWORK_PLACE_ID` — default live place (a raw id or a `[places.*]` name); meant as each dev's personal scratch place (`default_place` in a file)
-- `RWORK_API_KEY` — Open Cloud key for publishing (place-publishing scope)
+- `RWORK_API_KEY` — Open Cloud key for publishing (place-publishing scope). `publish` and `dev --upload` need it: Roblox takes a place upload from an API key only, not from the account Studio is signed in to
 - `RWORK_UNIVERSE_ID` — override the auto-resolved universe id when publishing
 - `RWORK_REVISION` — override the stamped revision (see Build stamp); by default it comes from `GITHUB_SHA`/`GITHUB_REF_NAME` on GitHub Actions, otherwise from `git`
 - `RWORK_DIAG=1` — verbose diagnostic logging

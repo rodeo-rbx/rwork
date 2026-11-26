@@ -30,10 +30,12 @@ let originalRevision: string | undefined;
 let fixture: string;
 let toolPath: string;
 let rojoCalls: string;
+let curlCalls: string;
 
-/** Stand-ins for the two tools staging runs, so the tests need neither installed and publish
- *  nothing. rojo records how it was called and writes the file `-o` names; darklua copies src's
- *  .luau files into dest, where the real one writes its output. */
+/** Stand-ins for the two tools staging runs and the one a publish uploads with, so the tests need
+ *  none installed and publish nothing. rojo records how it was called and writes the file `-o`
+ *  names; darklua copies src's .luau files into dest, where the real one writes its output; curl
+ *  records how it was called and answers as Open Cloud does for a new version. */
 function fakeTools(bin: string) {
 	mkdirSync(bin);
 	writeFileSync(
@@ -56,22 +58,38 @@ done
 echo "successfully processed files"
 `,
 	);
+	writeFileSync(
+		join(bin, "curl"),
+		`#!/bin/bash
+echo "$*" >> "${curlCalls}"
+while [ $# -gt 0 ]; do
+	if [ "$1" = "-o" ]; then echo '{"versionNumber":1}' > "$2"; fi
+	shift
+done
+printf 200
+`,
+	);
 	chmodSync(join(bin, "rojo"), 0o755);
 	chmodSync(join(bin, "darklua"), 0o755);
+	chmodSync(join(bin, "curl"), 0o755);
 }
 
-/** Runs the rwork CLI in the fixture. Its PATH holds the stand-ins and the system's tools and
- *  nothing else, so no real rojo is reachable; with no RWORK_API_KEY either, publish uploads
- *  through `rojo upload`, which is the stand-in. */
-function rwork(...args: string[]) {
+/** Runs the rwork CLI in the fixture with `env` added to its environment. Its PATH holds the
+ *  stand-ins and the system's tools and nothing else, so no real rojo is reachable, and a publish
+ *  uploads through the curl stand-in. */
+function rworkWith(env: Record<string, string>, ...args: string[]) {
 	const proc = Bun.spawnSync([process.execPath, join(import.meta.dir, "index.ts"), ...args], {
 		cwd: fixture,
-		env: { PATH: toolPath, RWORK_REVISION: "test@0000000" },
+		env: { PATH: toolPath, RWORK_REVISION: "test@0000000", ...env },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
 	return { code: proc.exitCode, output: `${proc.stdout}${proc.stderr}` };
 }
+
+/** The same, with what a publish needs to reach its upload: a key, and the universe it would
+ *  otherwise ask Roblox for. */
+const rwork = (...args: string[]) => rworkWith({ RWORK_API_KEY: "test-key", RWORK_UNIVERSE_ID: "1" }, ...args);
 
 const lastRojoCall = () => readFileSync(rojoCalls, "utf8").trim().split("\n").at(-1)!;
 
@@ -118,6 +136,7 @@ beforeEach(() => {
 	fixture = process.cwd();
 
 	rojoCalls = join(fixture, "rojo-calls");
+	curlCalls = join(fixture, "curl-calls");
 	toolPath = `${join(fixture, "bin")}:/usr/bin:/bin`;
 	fakeTools(join(fixture, "bin"));
 
@@ -191,8 +210,31 @@ test.each([
 	expect(readFileSync(join(stage, "src/ReplicatedStorage/shared/data.txt"), "utf8")).toBe("data\n");
 	expect(statSync(join(stage, "src/Workspace/Map.rbxm")).ino).toBe(statSync("src/Workspace/Map.rbxm").ino);
 
-	// rojo's last step, building or uploading, ran in that stage.
+	// rojo's last step, building the place file, ran in that stage.
 	expect(lastRojoCall().split("|")[0]).toBe(resolve(stage));
+});
+
+test("publish with no API key says so, and stages and uploads nothing", () => {
+	const rojoBefore = readFileSync(rojoCalls, "utf8");
+
+	const { code, output } = rworkWith({}, "publish", "--place", "1");
+	expect(code).toBe(1);
+	expect(output).toContain("RWORK_API_KEY");
+
+	expect(existsSync(buildDir(rworkBuild))).toBe(false);
+	expect(readFileSync(rojoCalls, "utf8")).toBe(rojoBefore);
+	expect(existsSync(curlCalls)).toBe(false);
+});
+
+test("publish uploads the place file it built", () => {
+	expect(rwork("publish", "--place", "1").code).toBe(0);
+
+	const uploads = readFileSync(curlCalls, "utf8").trim().split("\n");
+	expect(uploads).toHaveLength(1);
+	expect(uploads[0]).toContain(`--data-binary @${placeFile(rworkBuild)}`);
+	expect(uploads[0]).toContain("https://apis.roblox.com/universes/v1/1/places/1/versions?versionType=Published");
+	// The key goes to curl in a header file, never as an argument.
+	expect(uploads[0]).not.toContain("test-key");
 });
 
 test("build writes the place file where it always has", () => {

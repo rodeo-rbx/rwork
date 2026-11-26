@@ -29,10 +29,8 @@ async function resolveUniverse(place: string): Promise<string> {
 }
 
 // Build the binary place file with rojo, then upload it via the Open Cloud
-// "publish version" endpoint. We bypass `rojo upload` because rojo's bundled
-// HTTP client stalls and times out on large place uploads (rojo sets no timeout,
-// and its reqwest transport hangs); rojo's *build* is fine, and a plain fetch
-// with a Content-Length body publishes reliably.
+// "publish version" endpoint. `rojo upload` is no use here: it posts to a
+// legacy endpoint that Roblox has removed.
 async function publishViaOpenCloud(stage: string, file: string, place: string, apiKey: string) {
 	const universe = await resolveUniverse(place);
 
@@ -106,14 +104,25 @@ async function publishViaOpenCloud(stage: string, file: string, place: string, a
 	}
 }
 
-// Build the prepared project and upload it to a live place. With RWORK_API_KEY
-// set it uses the Open Cloud API (universe auto-resolved from the place id, or
-// RWORK_UNIVERSE_ID); otherwise it falls back to rojo's cookie auth.
+// Build the prepared project and upload it to a live place through the Open
+// Cloud API, as RWORK_API_KEY (universe auto-resolved from the place id, or
+// RWORK_UNIVERSE_ID). There is no other way in: Roblox takes a place upload
+// from an API key only, not from the account Studio is signed in to. So with
+// no key this stops here, before the staging a publish would spend on nothing.
 export async function publish(
 	rworkBuild: RworkBuild,
 	place: string,
 	options?: { open?: boolean },
 ) {
+	const apiKey = process.env.RWORK_API_KEY;
+	if (!apiKey) {
+		log.error(
+			"publish needs RWORK_API_KEY, an Open Cloud API key that can write to the place. " +
+				"Roblox no longer accepts a Studio sign-in for uploading one.",
+		);
+		process.exit(1);
+	}
+
 	const startTime = performance.now();
 	// Its own stage: a sync of this build may be running, serving syncDir.
 	const stage = buildDir(rworkBuild);
@@ -126,21 +135,7 @@ export async function publish(
 	}, stage);
 	runDarkluaOnce(rworkBuild, stage);
 
-	const apiKey = process.env.RWORK_API_KEY;
-	if (apiKey) {
-		await publishViaOpenCloud(stage, placeFile(rworkBuild), place, apiKey);
-	} else {
-		// No API key: fall back to rojo's cookie auth, which builds + uploads.
-		log.info(`Publishing to place ${place} via cookie auth...`);
-		const proc = Bun.spawnSync(["rojo", "upload", "--asset_id", place], {
-			cwd: stage,
-			stdio: ["inherit", "inherit", "inherit"],
-		});
-		if (proc.exitCode !== 0) {
-			log.error(`Failed to publish to place ${place} (code ${proc.exitCode})`);
-			process.exit(1);
-		}
-	}
+	await publishViaOpenCloud(stage, placeFile(rworkBuild), place, apiKey);
 
 	const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
 	log.success(`Published ${stage} to place ${place} in ${elapsed}s`);
